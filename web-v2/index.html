@@ -2097,16 +2097,27 @@
       }
       // ── 请求路径中文说明（无诊断码时用路径解释记录用途）──
       const PATH_CN = {
+        // ── 管理面板 ──
         "/api/admin/dashboard": "拉取仪表盘数据",
         "/api/admin/debug/logs": "查询诊断记录",
-        "/api/admin/keys": "管理 API 密钥",
         "/api/admin/session": "查询会话状态",
+        "/api/admin/settings": "查询网关设置",
+        "/api/admin/models": "查询模型列表",
+        "/api/admin/personalities": "查询人格配置",
         "/api/admin/reset-stats": "重置统计数据",
-        "/api/accounts": "查询账号列表",
+        "/api/admin/login": "管理员登录",
+        "/api/admin/keys": "管理 API 密钥",
+        // ── 账号管理 ──
         "/api/accounts/delete": "删除账号",
+        "/api/accounts": "查询账号列表",
+        // ── 会话 ──
+        "/api/session/properties": "查询会话属性",
+        // ── OAuth ──
         "/api/auth/start": "发起 OAuth 登录",
         "/api/auth/callback": "OAuth 登录回调",
+        // ── 系统 ──
         "/api/health": "健康检查",
+        // ── AI API ──
         "/v1/chat/completions": "Chat 对话补全",
         "/v1/responses": "Responses API",
         "/v1/models": "查询可用模型",
