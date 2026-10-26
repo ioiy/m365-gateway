@@ -2011,6 +2011,7 @@
         const LEVEL_CN = { info: "信息", warn: "警告", error: "错误" };
         const HEALTH_CN = { healthy: "健康", cooldown: "冷却中", isolated: "已隔离", online: "在线", expired: "已过期" };
         const CODE_CN = {
+          // ── 基础错误码 ──
           upstream_throttled: "上游配额耗尽",
           upstream_rate_limit: "上游限流",
           upstream_disengaged: "上游断开",
@@ -2021,26 +2022,36 @@
           upstream_response_error: "上游响应异常",
           upstream_payload_too_large: "上游响应过大",
           upstream_request_rejected: "上游请求被拒",
+          upstream_auth_error: "上游认证错误",
+          upstream_unavailable: "上游不可用",
           upstream_error: "上游错误",
           account_cooldown: "账号冷却中",
           account_busy: "账号繁忙",
           account_pool_isolated: "账号池已隔离",
           account_credential_error: "账号凭据错误",
           account_egress_unavailable: "出口中继不可用",
+          account_route_changed: "账号路由已变更",
+          account_not_active: "账号未激活",
           session_account_unavailable: "会话账号不可用",
           no_account: "无可用账号",
           conversation_busy: "会话繁忙",
+          conversation_lease_conflict: "会话租约冲突",
           context_length_exceeded: "上下文超限",
           tools_exceed_context: "工具定义超限",
           tools_too_large: "工具定义过大",
           invalid_tools: "工具定义无效",
           invalid_request_error: "请求格式错误",
           invalid_json: "JSON 格式无效",
+          invalid_multimodal_content: "多模态内容无效",
           request_too_large: "请求体过大",
+          request_aborted: "请求已中止",
           unsupported_model: "不支持的模型",
+          unsupported_upstream_attachment: "不支持的上游附件",
           method_not_allowed: "方法不允许",
           not_found: "未找到",
           image_generation_not_supported: "不支持图片生成",
+          image_upload_failed: "图片上传失败",
+          image_upload_inline_required: "图片需内联上传",
           duplicate_request: "重复请求",
           previous_response_not_found: "前序响应不存在",
           invalid_parallel_tool_calls: "并行工具调用无效",
@@ -2052,14 +2063,40 @@
           local_patch_disabled: "本地补丁已禁用",
           invalid_session_key: "会话密钥无效",
           invalid_compaction: "压缩胶囊无效",
+          invalid_upstream_attachment: "附件格式无效",
           tool_decision_invalid: "工具决策无效",
           tool_call_generation_failed: "工具调用生成失败",
-          invalid_upstream_attachment: "附件格式无效",
+          tool_action_blocked: "工具动作被阻止",
+          tool_routing_failed: "工具路由失败",
+          continuation_decision_invalid: "续接决策无效",
+          pending_assistant_action: "待处理的助手动作",
+          repeated_tool_call: "重复工具调用",
+          auth_error: "认证错误",
           token_refresh_authorization_failed: "令牌刷新授权失败",
+          token_refresh_rate_limited: "令牌刷新被限流",
+          token_refresh_unavailable: "令牌刷新不可用",
+          // ── terminal_* 动态码 ──
+          terminal_complete: "正常完成",
+          terminal_cancel: "请求取消",
+          terminal_error: "请求错误",
+          terminal_commit: "提交完成",
         };
         function levelCN(l) { return LEVEL_CN[l] || l || "信息"; }
         function healthCN(h) { return HEALTH_CN[h] || h || "未知"; }
-        function codeCN(c) { return CODE_CN[c] ? CODE_CN[c] : (c || "--"); }
+        function codeCN(c) {
+          if (!c) return "--";
+          if (CODE_CN[c]) return CODE_CN[c];
+          // 动态码: terminal_error_{子码} → "错误: {子码中文}"
+          if (c.startsWith("terminal_error_")) {
+            const sub = c.slice("terminal_error_".length);
+            return "错误: " + (CODE_CN[sub] || sub);
+          }
+          if (c.startsWith("terminal_cancel_")) {
+            const sub = c.slice("terminal_cancel_".length);
+            return "取消: " + (CODE_CN[sub] || sub);
+          }
+          return c;
+        }
 
         document.querySelectorAll(".nav-item").forEach((it) => {
           it.classList.toggle("active", it.getAttribute("data-view") === name);
