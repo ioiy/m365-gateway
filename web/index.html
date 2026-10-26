@@ -2065,6 +2065,37 @@
         }
         return c;
       }
+      // ── 请求路径中文说明（无诊断码时用路径解释记录用途）──
+      const PATH_CN = {
+        "/api/admin/dashboard": "拉取仪表盘数据",
+        "/api/admin/debug/logs": "查询诊断记录",
+        "/api/admin/keys": "管理 API 密钥",
+        "/api/admin/session": "查询会话状态",
+        "/api/admin/reset-stats": "重置统计数据",
+        "/api/accounts": "查询账号列表",
+        "/api/accounts/delete": "删除账号",
+        "/api/auth/start": "发起 OAuth 登录",
+        "/api/auth/callback": "OAuth 登录回调",
+        "/api/health": "健康检查",
+        "/v1/chat/completions": "Chat 对话补全",
+        "/v1/responses": "Responses API",
+        "/v1/models": "查询可用模型",
+      };
+      function pathCN(p) {
+        if (!p) return "";
+        if (PATH_CN[p]) return PATH_CN[p];
+        for (const [prefix, label] of Object.entries(PATH_CN)) {
+          if (p.startsWith(prefix)) return label;
+        }
+        return "";
+      }
+      // 综合描述：有诊断码就翻译码，没有就按路径解释
+      function descCN(code, path) {
+        const c = codeCN(code);
+        if (c !== "--") return c;
+        const p = pathCN(path);
+        return p || "--";
+      }
 
       // 视图切换
       window.switchView = function (name) {
@@ -2671,7 +2702,7 @@
                 item.innerHTML = `
                   <div>
                     <span class="badge-glass ${l.level === "error" ? "badge-rose" : l.level === "warn" ? "badge-amber" : "badge-blue"}">${escapeHtml(levelCN(l.level))}</span>
-                    <span style="color:var(--text-main);margin-left:8px">${escapeHtml(l.path || "-")} · ${escapeHtml(codeCN(l.code) || String(l.status || ""))}</span>
+                    <span style="color:var(--text-main);margin-left:8px">${escapeHtml(l.path || "-")} · ${escapeHtml(descCN(l.code, l.path))}</span>
                   </div>
                   <span style="color:var(--text-dim)">${new Date(l.at || Date.now()).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</span>
                 `;
@@ -2694,7 +2725,7 @@
                   <td><span class="badge-glass ${l.level === "error" ? "badge-rose" : l.level === "warn" ? "badge-amber" : "badge-blue"}">${escapeHtml(levelCN(l.level))}</span></td>
                   <td><strong>${escapeHtml(l.method || "--")}</strong></td>
                   <td>${escapeHtml(l.path || "--")} · HTTP ${escapeHtml(String(l.status ?? "--"))}</td>
-                  <td>${escapeHtml(codeCN(l.code))} · ${numStr(l.durationMs)} ms</td>
+                  <td>${escapeHtml(descCN(l.code, l.path))} · ${numStr(l.durationMs)} ms</td>
                 `;
                 fullTbody.appendChild(tr);
               });
