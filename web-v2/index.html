@@ -2007,6 +2007,60 @@
 
       // 视图切换
       window.switchView = function (name) {
+        // ── 诊断记录中文注释映射表 ──
+        const LEVEL_CN = { info: "信息", warn: "警告", error: "错误" };
+        const HEALTH_CN = { healthy: "健康", cooldown: "冷却中", isolated: "已隔离", online: "在线", expired: "已过期" };
+        const CODE_CN = {
+          upstream_throttled: "上游配额耗尽",
+          upstream_rate_limit: "上游限流",
+          upstream_disengaged: "上游断开",
+          upstream_connect_error: "上游连接失败",
+          upstream_relay_error: "中继连接失败",
+          upstream_disconnected: "上游中断",
+          upstream_timeout: "上游超时",
+          upstream_response_error: "上游响应异常",
+          upstream_payload_too_large: "上游响应过大",
+          upstream_request_rejected: "上游请求被拒",
+          upstream_error: "上游错误",
+          account_cooldown: "账号冷却中",
+          account_busy: "账号繁忙",
+          account_pool_isolated: "账号池已隔离",
+          account_credential_error: "账号凭据错误",
+          account_egress_unavailable: "出口中继不可用",
+          session_account_unavailable: "会话账号不可用",
+          no_account: "无可用账号",
+          conversation_busy: "会话繁忙",
+          context_length_exceeded: "上下文超限",
+          tools_exceed_context: "工具定义超限",
+          tools_too_large: "工具定义过大",
+          invalid_tools: "工具定义无效",
+          invalid_request_error: "请求格式错误",
+          invalid_json: "JSON 格式无效",
+          request_too_large: "请求体过大",
+          unsupported_model: "不支持的模型",
+          method_not_allowed: "方法不允许",
+          not_found: "未找到",
+          image_generation_not_supported: "不支持图片生成",
+          duplicate_request: "重复请求",
+          previous_response_not_found: "前序响应不存在",
+          invalid_parallel_tool_calls: "并行工具调用无效",
+          invalid_client_metadata: "客户端元数据无效",
+          invalid_agent_depth: "Agent 层级无效",
+          agent_depth_exceeded: "Agent 层级超限",
+          invalid_task_id: "任务 ID 无效",
+          invalid_tool_choice: "工具选择无效",
+          local_patch_disabled: "本地补丁已禁用",
+          invalid_session_key: "会话密钥无效",
+          invalid_compaction: "压缩胶囊无效",
+          tool_decision_invalid: "工具决策无效",
+          tool_call_generation_failed: "工具调用生成失败",
+          invalid_upstream_attachment: "附件格式无效",
+          token_refresh_authorization_failed: "令牌刷新授权失败",
+        };
+        function levelCN(l) { return LEVEL_CN[l] || l || "信息"; }
+        function healthCN(h) { return HEALTH_CN[h] || h || "未知"; }
+        function codeCN(c) { return CODE_CN[c] ? CODE_CN[c] : (c || "--"); }
+
         document.querySelectorAll(".nav-item").forEach((it) => {
           it.classList.toggle("active", it.getAttribute("data-view") === name);
         });
@@ -2305,8 +2359,8 @@
           document.getElementById("heroAccEmail").textContent = activeAcc.email || "未知账户";
           document.getElementById("heroAccName").textContent = activeAcc.displayName || "Microsoft User";
           document.getElementById("heroAccAvatar").textContent = (activeAcc.email || "M")[0].toUpperCase();
-          document.getElementById("heroAccEgress").textContent = activeAcc.egress || "direct";
-          document.getElementById("heroAccHealth").textContent = activeAcc.health || "healthy";
+          document.getElementById("heroAccEgress").textContent = ({ direct: "直连", relay: "中继" })[activeAcc.egress] || activeAcc.egress || "直连";
+          document.getElementById("heroAccHealth").textContent = healthCN(activeAcc.health);
           document.getElementById("radarReqCount").textContent = numStr(activeAcc.requestCount);
           document.getElementById("radarErrCount").textContent = numStr(activeAcc.errorCount);
 
@@ -2655,9 +2709,10 @@
           else if (a.health === "isolated") statusBadge = '<span class="badge-glass badge-rose">已隔离</span>';
           const lastUsedText = a.lastRequestAt ? relTime(a.lastRequestAt) : "未使用";
 
+          const TOKEN_STATE_CN = { valid: "有效", expired: "已过期", auth_failed: "授权失败", refreshing: "刷新中", unknown: "未知" };
           const tokenBadge = a.tokenState === "valid"
             ? '<span class="badge-glass badge-emerald">有效</span>'
-            : `<span class="badge-glass badge-amber">${escapeHtml(a.tokenState || "未知")}</span>`;
+            : `<span class="badge-glass badge-amber">${escapeHtml(TOKEN_STATE_CN[a.tokenState] || a.tokenState || "未知")}</span>`;
 
           tr.innerHTML = `
             <td>${statusBadge}</td>
@@ -2666,7 +2721,7 @@
               <div class="mono-tag" style="font-size:11px;color:var(--text-dim)">${escapeHtml(a.id.slice(0, 14))}...</div>
             </td>
             <td>${escapeHtml(a.displayName || "--")}</td>
-            <td><span class="badge-glass badge-blue">${escapeHtml(a.egress || "direct")}</span></td>
+            <td><span class="badge-glass badge-blue">${escapeHtml(({ direct: "直连", relay: "中继" })[a.egress] || a.egress || "直连")}</span></td>
             <td>${tokenBadge}</td>
             <td>${numStr(a.requestCount)} / <span style="color:var(--accent-rose)">${numStr(a.errorCount)}</span><div style="font-size:10px;color:var(--text-dim);margin-top:2px">${lastUsedText}</div></td>
             <td>入: ${tokenStr(a.tokenIn)} &bull; 出: ${tokenStr(a.tokenOut)}</td>
@@ -3418,8 +3473,8 @@
                 item.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--card-sub-bg);border:1px solid var(--table-border);border-radius:var(--radius-md);font-size:12px";
                 item.innerHTML = `
                   <div>
-                    <span class="badge-glass ${l.level === "error" ? "badge-rose" : "badge-blue"}">${escapeHtml(l.method || "HTTP")}</span>
-                    <span style="color:var(--text-main);margin-left:8px">${escapeHtml(l.path || "-")} · ${escapeHtml(l.code || String(l.status || ""))}</span>
+                    <span class="badge-glass ${l.level === "error" ? "badge-rose" : l.level === "warn" ? "badge-amber" : "badge-blue"}">${escapeHtml(levelCN(l.level))}</span>
+                    <span style="color:var(--text-main);margin-left:8px">${escapeHtml(l.path || "-")} · ${escapeHtml(codeCN(l.code) || String(l.status || ""))}</span>
                   </div>
                   <span style="color:var(--text-dim)">${new Date(l.at || Date.now()).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</span>
                 `;
@@ -3439,10 +3494,10 @@
                 const tr = document.createElement("tr");
                 tr.innerHTML = `
                   <td class="mono-tag" style="font-size:11px">${new Date(l.at || Date.now()).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}</td>
-                  <td><span class="badge-glass ${l.level === "error" ? "badge-rose" : "badge-blue"}">${escapeHtml(l.level || "info")}</span></td>
+                  <td><span class="badge-glass ${l.level === "error" ? "badge-rose" : l.level === "warn" ? "badge-amber" : "badge-blue"}">${escapeHtml(levelCN(l.level))}</span></td>
                   <td><strong>${escapeHtml(l.method || "--")}</strong></td>
                   <td>${escapeHtml(l.path || "--")} · HTTP ${escapeHtml(String(l.status ?? "--"))}</td>
-                  <td>${escapeHtml(l.code || "--")} · ${numStr(l.durationMs)} ms</td>
+                  <td>${escapeHtml(codeCN(l.code))} · ${numStr(l.durationMs)} ms</td>
                 `;
                 fullTbody.appendChild(tr);
               });
