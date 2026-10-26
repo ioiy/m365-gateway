@@ -32,3 +32,4 @@ optional-egress-relay/m365-egress-relay
 .vscode/
 .DS_Store
 Thumbs.db
+.deploy.env
