@@ -169,6 +169,16 @@ export function modelMaxInputTokens(model: string): number {
   return spec.contextWindow - spec.maxOutputTokens;
 }
 
+/** Model-specific tool result compression limit.  Larger context windows
+ *  (Claude 200K) can afford to keep more tool result detail intact, while
+ *  smaller windows (GPT 224K-128K=96K usable) need more aggressive
+ *  compression to leave room for the user turn and instructions. */
+export function modelToolResultLimit(model: string): number {
+  const usable = Math.min(modelMaxInputTokens(model), 128_000);
+  if (usable > 120_000) return 80_000;
+  return 48_000;
+}
+
 /**
  * Conservative prompt estimate for the gateway's dominant input classes:
  * Latin/code averages roughly four characters per token, while CJK and other

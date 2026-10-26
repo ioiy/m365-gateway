@@ -16,7 +16,7 @@ import {
 import { evaluateCompletionEvidence } from "./completion-evidence";
 import { decryptJSON, encryptJSON, sha256 } from "./crypto";
 import type { Env } from "./types";
-import { canonicalModel, estimatePromptTokens, modelMaxInputTokens, modelPromptCharacterLimit, modelTone } from "./models";
+import { canonicalModel, estimatePromptTokens, modelMaxInputTokens, modelPromptCharacterLimit, modelToolResultLimit, modelTone } from "./models";
 import type { AccountSelection } from "./tenant-state";
 import {
   completedEvidenceContext,
@@ -2264,6 +2264,21 @@ export function chatPrompt(
   }
 
   let { units, segments } = renderSegments();
+
+  /** Proactive compression: estimate the current turn token count before
+   *  calling ensureCurrentTurnFits. If it exceeds 85% of the token budget,
+   *  pre-compress tool results to 32K immediately, skipping the
+   *  fail-then-retry round trip. */
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    const estimatedTokens = segments.reduce((sum, s) => sum + estimatePromptTokens(s.value), 0);
+    if (estimatedTokens > maxTokens * 0.85) {
+      compactOversizedChatToolResults(messages, 32_000);
+      const proactivelyRebuilt = renderSegments();
+      units = proactivelyRebuilt.units;
+      segments = proactivelyRebuilt.segments;
+    }
+  }
+
   let result = "";
   try {
     ensureCurrentTurnFits(units, segments, maxCharacters, maxTokens);
@@ -2271,9 +2286,10 @@ export function chatPrompt(
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "CURRENT_TURN_TOO_LARGE") throw error;
     /** Progressive compression: re-compress tool results with shrinking limits
-     *  (32K -> 16K -> 8K -> 4K) before giving up. Each pass replaces tool
-     *  content in-place; renderSegments reads the updated content on retry. */
-    const progressiveLimits = [32_000, 16_000, 8_000, 4_000];
+     *  (16K -> 8K -> 4K) before giving up. Each pass replaces tool
+     *  content in-place; renderSegments reads the updated content on retry.
+     *  32K is already tried by proactive compression above. */
+    const progressiveLimits = [16_000, 8_000, 4_000];
     let lastError: unknown = error;
     for (const limit of progressiveLimits) {
       compactOversizedChatToolResults(messages, limit);
@@ -2421,6 +2437,19 @@ export function responsesPrompt(input: unknown, maxCharacters = 3_000_000, maxTo
   }
 
   let { units, segments } = renderSegments();
+
+  /** Proactive compression: estimate token count before ensureCurrentTurnFits.
+   *  If over 85% of budget, pre-compress tool outputs to 32K immediately. */
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    const estimatedTokens = segments.reduce((sum, s) => sum + estimatePromptTokens(s.value), 0);
+    if (estimatedTokens > maxTokens * 0.85) {
+      compactOversizedResponsesToolOutputs(inputArray, 32_000);
+      const proactivelyRebuilt = renderSegments();
+      units = proactivelyRebuilt.units;
+      segments = proactivelyRebuilt.segments;
+    }
+  }
+
   let result = "";
   try {
     ensureCurrentTurnFits(units, segments, maxCharacters, maxTokens);
@@ -2428,8 +2457,8 @@ export function responsesPrompt(input: unknown, maxCharacters = 3_000_000, maxTo
   } catch (error) {
     if (!(error instanceof Error) || error.message !== "CURRENT_TURN_TOO_LARGE") throw error;
     /** Progressive compression: re-compress tool outputs with shrinking limits
-     *  (32K -> 16K -> 8K -> 4K) before giving up. */
-    const progressiveLimits = [32_000, 16_000, 8_000, 4_000];
+     *  (16K -> 8K -> 4K) before giving up. 32K already tried above. */
+    const progressiveLimits = [16_000, 8_000, 4_000];
     let lastError: unknown = error;
     for (const limit of progressiveLimits) {
       compactOversizedResponsesToolOutputs(inputArray, limit);
@@ -3128,6 +3157,7 @@ async function exchange(
           }));
         }
       }
+      const quotaExhausted = cause instanceof Error && cause.message === "CHAT_THROTTLED_QUOTA_EXHAUSTED";
       const mayFailOver = mayFailOverExchange(
         disposition?.mayFailOverBeforeVisibleOutput,
         lease.started,
@@ -3135,12 +3165,14 @@ async function exchange(
         visible,
         invocationSubmitted || !mayFailOverChatHubFailure(cause),
         logicalDeadline,
+        Date.now(),
+        quotaExhausted,
       // A single logical request may use only the current active account and
       // its immediate successor. Scanning the whole pool after a run of
       // transient failures contacts dormant accounts and creates the exact
       // burst/fingerprint pattern that production account isolation is meant
       // to prevent.
-      ) && attemptedAccounts.size < 2;
+      ) && attemptedAccounts.size < 3;
       if (mayFailOver) {
         let next: AccountSelection | null;
         try {
@@ -3323,8 +3355,13 @@ export function mayFailOverExchange(
   invocationSubmitted = false,
   deadlineAt = Number.POSITIVE_INFINITY,
   now = Date.now(),
+  quotaExhausted = false,
 ): boolean {
-  return Boolean(classifiedAsSafe && !started && !accountLocked && !visible && !invocationSubmitted && now < deadlineAt);
+  // Quota exhaustion (CHAT_THROTTLED_QUOTA_EXHAUSTED) means Microsoft rejected
+  // the request before processing it; the conversation state is not polluted.
+  // Allow failover even when invocationSubmitted is true in that case.
+  const submissionOk = !invocationSubmitted || quotaExhausted;
+  return Boolean(classifiedAsSafe && !started && !accountLocked && !visible && submissionOk && now < deadlineAt);
 }
 
 function toolRequired(choice: unknown): boolean {
@@ -6367,10 +6404,14 @@ async function chatCompletions(request: Request, env: Env, metrics?: RequestMetr
     const recoveryContext = recoveredRepeatedProposal
       ? "\n\nTOOL CONTINUATION RECOVERY: The latest proposed client action repeated an already completed or repeatedly failed action and was rejected. Stay on the current task, preserve all progress, and select a materially different next action or different arguments. Do not restart the audit or repeat the initial inspection."
       : "";
-    compactOversizedChatToolResults(promptValue);
+    compactOversizedChatToolResults(promptValue, modelToolResultLimit(model));
     const toolResultContext = restoreCheckpointHistory ? `\n\n${FRESH_TOOL_RESULT_CONTINUATION_PROMPT}` : "";
     currentTurnPrompt = `${anchorBudget.prefix}${chatPrompt(promptValue, anchorBudget.promptCharacters, anchorBudget.promptTokens)}${evidence ? `\n\n${evidence}` : ""}${recoveryContext}${toolResultContext}`;
     prompt = currentTurnPrompt;
+    const promptTokens = estimatePromptTokens(prompt);
+    if (promptTokens > promptTokenLimit * 0.8) {
+      console.warn(JSON.stringify({ event: "token_budget_high", path: "chat/completions", model, usage_ratio: Math.round(promptTokens / promptTokenLimit * 100) / 100, prompt_tokens: promptTokens, budget: promptTokenLimit }));
+    }
   } catch (cause) {
     await session.release(lease.leaseId);
     throw cause;
@@ -6773,8 +6814,8 @@ export function hydrateLeaseFromCompaction(
 async function responsesCompact(request: Request, env: Env): Promise<Response> {
   const parsed = await body<ResponsesBody>(request, MAX_RESPONSES_REQUEST_BYTES);
   if (!parsed || typeof parsed !== "object") throw new Error("INVALID_REQUEST");
-  compactOversizedResponsesToolOutputs(parsed.input);
   const model = canonicalModel(parsed.model);
+  compactOversizedResponsesToolOutputs(parsed.input, modelToolResultLimit(model));
   // Responses Lite puts the caller runtime in input[].additional_tools rather
   // than the top-level tools array. Derive the same routable manifest used by
   // responsesCore before creating the encrypted compaction capsule; otherwise
@@ -7424,7 +7465,6 @@ async function responsesCore(
 ): Promise<Response> {
   const deadlineAt = logicalRequestDeadlineAt();
   if (!parsed || typeof parsed !== "object") throw new Error("INVALID_REQUEST");
-  compactOversizedResponsesToolOutputs(parsed.input);
   observeMetricValues(metrics, parsed.input, parsed.tools, parsed.tool_choice);
   validateTools(parsed.tools);
   validateParallelToolMode(parsed.parallel_tool_calls);
@@ -7444,6 +7484,7 @@ async function responsesCore(
   validateTools(parsed.tools);
   parsed.tool_choice = normalizeResponsesCustomToolChoice(parsed.tool_choice);
   const model = canonicalModel(parsed.model);
+  compactOversizedResponsesToolOutputs(parsed.input, modelToolResultLimit(model));
   if (streamLifecycle) streamLifecycle.model = model;
   const tone = modelTone(model, parsed.reasoning?.effort ?? "");
   const responseId = streamLifecycle?.responseId ?? `resp_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -7541,8 +7582,8 @@ async function responsesCore(
     });
     const prepared = prepareResponsesMultimodal(activeInput);
     attachments = prepared.attachments;
-    compactOversizedResponsesToolOutputs(prepared.value);
-    compactOversizedResponsesToolOutputs(prepared.inferenceValue);
+    compactOversizedResponsesToolOutputs(prepared.value, modelToolResultLimit(model));
+    compactOversizedResponsesToolOutputs(prepared.inferenceValue, modelToolResultLimit(model));
     const parsedLedger = await parseResponsesToolLedger(prepared.value, {
       completedSnapshots: storedToolSnapshots(lease.toolLedgerSnapshot),
       seed: lease.pendingCallId ? [{
@@ -7579,6 +7620,10 @@ async function responsesCore(
     const toolResultContext = outputs.length > 0 ? `\n\n${FRESH_TOOL_RESULT_CONTINUATION_PROMPT}` : "";
     currentTurnPrompt = `${anchorBudget.prefix}${responsesPrompt(promptValue, anchorBudget.promptCharacters, anchorBudget.promptTokens)}${evidence ? `\n\n${evidence}` : ""}${recoveryContext}${toolResultContext}`;
     prompt = currentTurnPrompt;
+    const promptTokens = estimatePromptTokens(prompt);
+    if (promptTokens > promptTokenLimit * 0.8) {
+      console.warn(JSON.stringify({ event: "token_budget_high", path: "/v1/responses", model, usage_ratio: Math.round(promptTokens / promptTokenLimit * 100) / 100, prompt_tokens: promptTokens, budget: promptTokenLimit }));
+    }
   } catch (cause) {
     await session.release(lease.leaseId);
     throw cause;
