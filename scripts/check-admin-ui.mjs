@@ -36,7 +36,7 @@ const assertions = [
   [/logsState = data\.records \|\| \[\]/u, "diagnostics must consume the records response field"],
   [/fetch\("\/api\/admin\/reset-stats"/u, "metric reset must use the implemented endpoint"],
   [/fetch\("\/api\/admin\/session"\)[\s\S]*?session\.must_change_password/u, "dashboard initialization must enforce the administrator session state"],
-  [/escapeHtml\(a\.tokenState \|\| "未知"\)/u, "dynamic account state must be HTML escaped"],
+  [/escapeHtml\(TOKEN_STATE_CN\[a\.tokenState\] \|\| a\.tokenState \|\| "未知"\)/u, "dynamic account state must be HTML escaped"],
   [/gpt-5\.6-sol/u, "the current default gateway model must be shown"],
   [/gpt-6-astra/u, "the current tenant-dependent gateway model must be shown"],
   [/claude-sonnet/u, "the current Claude gateway model must be shown"],
