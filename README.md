@@ -1,7 +1,34 @@
 # M365 Gateway Cloudflare 原生开源版（CF 版）
 
-版本：`0.1.6`
+版本：`0.1.7`
 部署形态：Cloudflare Workers + Static Assets + Durable Objects + KV +（可选）R2 冷归档
+
+---
+
+## 🚀 快速部署
+
+### 方式一：网页一键部署（推荐）
+
+点击下方按钮，在 Cloudflare 页面上完成部署：
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/ioiy/m365-gateway)
+
+> 点击后会跳转到 Cloudflare 部署页面，自动读取仓库配置。授权 GitHub 后 Cloudflare 会创建 Worker、KV 和 Durable Objects。部署完成后需要在管理后台设置管理员密码和 M365 账号。
+
+### 方式二：命令行一键部署
+
+```bash
+git clone https://github.com/ioiy/m365-gateway.git
+cd m365-gateway
+./deploy.sh setup   # 填写配置（只需一次）
+./deploy.sh          # 部署
+```
+
+升级：`git pull && ./deploy.sh`
+
+详见 [DEPLOY.md](DEPLOY.md)
+
+---
 
 这是完全运行在 Cloudflare 上的独立部署形态。Worker 直接连接 Microsoft 365 ChatHub，不依赖 VPS、Nginx、Docker、Cloudflare Tunnel 或任何本机/服务器源站，也不使用代理。
 

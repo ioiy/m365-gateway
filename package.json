@@ -1,6 +1,6 @@
 {
   "name": "m365-gateway-cloudflare-native",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Cloudflare-native Microsoft 365 gateway with OpenAI and Anthropic compatible APIs",
   "private": true,
   "type": "module",
