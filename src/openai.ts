@@ -2231,35 +2231,65 @@ export function chatPrompt(
   maxTokens = Number.POSITIVE_INFINITY,
 ): string {
   if (messages.length === 0) throw new Error("EMPTY_PROMPT");
-  const units = chatPromptUnits(messages);
-  const segments = units.map((unit) => {
-    const rendered = unit.items.map((message) => {
-      const role = promptProtocolRole(message.role);
-      let text = escapePromptProtocolText(contentText(message.content));
-      if (Array.isArray(message.tool_calls)) {
-        const calls = message.tool_calls.map((raw) => {
-          if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
-          const call = raw as Record<string, unknown>;
-          if (!call.function || typeof call.function !== "object" || Array.isArray(call.function)) return call;
-          const fn = call.function as Record<string, unknown>;
-          return {
-            ...call,
-            function: {
-              ...fn,
-              ...(typeof fn.name === "string" ? { name: clientToolWireName(fn.name) } : {}),
-            },
-          };
-        });
-        text += `\nTool calls: ${escapePromptProtocolText(JSON.stringify(calls))}`;
+
+  function renderSegments() {
+    const units = chatPromptUnits(messages);
+    const segments = units.map((unit) => {
+      const rendered = unit.items.map((message) => {
+        const role = promptProtocolRole(message.role);
+        let text = escapePromptProtocolText(contentText(message.content));
+        if (Array.isArray(message.tool_calls)) {
+          const calls = message.tool_calls.map((raw) => {
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+            const call = raw as Record<string, unknown>;
+            if (!call.function || typeof call.function !== "object" || Array.isArray(call.function)) return call;
+            const fn = call.function as Record<string, unknown>;
+            return {
+              ...call,
+              function: {
+                ...fn,
+                ...(typeof fn.name === "string" ? { name: clientToolWireName(fn.name) } : {}),
+              },
+            };
+          });
+          text += `\nTool calls: ${escapePromptProtocolText(JSON.stringify(calls))}`;
+        }
+        if (message.tool_call_id) text = `Tool result for ${promptProtocolIdentifier(message.tool_call_id)}:\n${text}`;
+        return `[${role}]\n${text}`;
+      }).join("\n\n");
+      const role = unit.instruction ? promptProtocolRole(unit.items[0].role) : "TURN";
+      return { role, value: rendered };
+    });
+    return { units, segments };
+  }
+
+  let { units, segments } = renderSegments();
+  let result = "";
+  try {
+    ensureCurrentTurnFits(units, segments, maxCharacters, maxTokens);
+    result = boundPrompt(segments, maxCharacters, maxTokens);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "CURRENT_TURN_TOO_LARGE") throw error;
+    /** Progressive compression: re-compress tool results with shrinking limits
+     *  (32K -> 16K -> 8K -> 4K) before giving up. Each pass replaces tool
+     *  content in-place; renderSegments reads the updated content on retry. */
+    const progressiveLimits = [32_000, 16_000, 8_000, 4_000];
+    let lastError: unknown = error;
+    for (const limit of progressiveLimits) {
+      compactOversizedChatToolResults(messages, limit);
+      const rebuilt = renderSegments();
+      try {
+        ensureCurrentTurnFits(rebuilt.units, rebuilt.segments, maxCharacters, maxTokens);
+        result = boundPrompt(rebuilt.segments, maxCharacters, maxTokens);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (e instanceof Error && e.message !== "CURRENT_TURN_TOO_LARGE") throw e;
       }
-      if (message.tool_call_id) text = `Tool result for ${promptProtocolIdentifier(message.tool_call_id)}:\n${text}`;
-      return `[${role}]\n${text}`;
-    }).join("\n\n");
-    const role = unit.instruction ? promptProtocolRole(unit.items[0].role) : "TURN";
-    return { role, value: rendered };
-  });
-  ensureCurrentTurnFits(units, segments, maxCharacters, maxTokens);
-  const result = boundPrompt(segments, maxCharacters, maxTokens);
+    }
+    if (lastError) throw lastError;
+  }
   if (!result.trim()) throw new Error("EMPTY_PROMPT");
   return result;
 }
@@ -2360,34 +2390,62 @@ export function responsesPrompt(input: unknown, maxCharacters = 3_000_000, maxTo
     return rendered;
   }
   if (!Array.isArray(input)) throw new Error("EMPTY_PROMPT");
-  const units = responsesPromptUnits(input);
-  const segments = units.map((unit) => {
-    const rendered: string[] = [];
-    for (const raw of unit.items) {
+  const inputArray = input as unknown[];
+
+  function renderSegments() {
+    const units = responsesPromptUnits(inputArray);
+    const segments = units.map((unit) => {
+      const rendered: string[] = [];
+      for (const raw of unit.items) {
+        const item = raw as Record<string, unknown>;
+        if (item.type === "function_call") {
+          const name = typeof item.name === "string" ? clientToolWireName(item.name) : "unknown";
+          const argumentsText = typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {});
+          rendered.push(`[ASSISTANT TOOL CALL ${promptProtocolIdentifier(item.call_id)}]\n${name}(${escapePromptProtocolText(argumentsText)})`);
+        } else if (item.type === "function_call_output") {
+          const output = contentText(item.output) || String(item.output ?? "");
+          rendered.push(`[TOOL RESULT ${promptProtocolIdentifier(item.call_id)}]\n${escapePromptProtocolText(boundedToolResultForPrompt(output))}`);
+        } else if (item.type === "message" || item.role) {
+          const role = promptProtocolRole(item.role);
+          rendered.push(`[${role}]\n${escapePromptProtocolText(contentText(item.content))}`);
+        } else if (typeof item.text === "string") rendered.push(escapePromptProtocolText(item.text));
+      }
+      const role = unit.instruction ? promptProtocolRole((unit.items[0] as Record<string, unknown>)?.role) : "TURN";
+      return { role, value: rendered.join("\n\n") };
+    }).filter((segment) => segment.value.length > 0);
+    const renderedUnits = units.filter((unit) => unit.items.some((raw) => {
       const item = raw as Record<string, unknown>;
-      if (item.type === "function_call") {
-        const name = typeof item.name === "string" ? clientToolWireName(item.name) : "unknown";
-        const argumentsText = typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {});
-        rendered.push(`[ASSISTANT TOOL CALL ${promptProtocolIdentifier(item.call_id)}]\n${name}(${escapePromptProtocolText(argumentsText)})`);
-      } else if (item.type === "function_call_output") {
-        const output = contentText(item.output) || String(item.output ?? "");
-        rendered.push(`[TOOL RESULT ${promptProtocolIdentifier(item.call_id)}]\n${escapePromptProtocolText(boundedToolResultForPrompt(output))}`);
-      } else if (item.type === "message" || item.role) {
-        const role = promptProtocolRole(item.role);
-        rendered.push(`[${role}]\n${escapePromptProtocolText(contentText(item.content))}`);
-      } else if (typeof item.text === "string") rendered.push(escapePromptProtocolText(item.text));
+      return item?.type === "function_call" || item?.type === "function_call_output" || item?.type === "message" || Boolean(item?.role) || typeof item?.text === "string";
+    }));
+    return { units: renderedUnits, segments };
+  }
+
+  let { units, segments } = renderSegments();
+  let result = "";
+  try {
+    ensureCurrentTurnFits(units, segments, maxCharacters, maxTokens);
+    result = boundPrompt(segments, maxCharacters, maxTokens);
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "CURRENT_TURN_TOO_LARGE") throw error;
+    /** Progressive compression: re-compress tool outputs with shrinking limits
+     *  (32K -> 16K -> 8K -> 4K) before giving up. */
+    const progressiveLimits = [32_000, 16_000, 8_000, 4_000];
+    let lastError: unknown = error;
+    for (const limit of progressiveLimits) {
+      compactOversizedResponsesToolOutputs(inputArray, limit);
+      const rebuilt = renderSegments();
+      try {
+        ensureCurrentTurnFits(rebuilt.units, rebuilt.segments, maxCharacters, maxTokens);
+        result = boundPrompt(rebuilt.segments, maxCharacters, maxTokens);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (e instanceof Error && e.message !== "CURRENT_TURN_TOO_LARGE") throw e;
+      }
     }
-    const role = unit.instruction ? promptProtocolRole((unit.items[0] as Record<string, unknown>)?.role) : "TURN";
-    return { role, value: rendered.join("\n\n") };
-  }).filter((segment) => segment.value.length > 0);
-  // Filtering empty unknown items would desynchronize indices; those items do
-  // not belong to the prompt protocol, so rebuild matching non-empty units.
-  const renderedUnits = units.filter((unit) => unit.items.some((raw) => {
-    const item = raw as Record<string, unknown>;
-    return item?.type === "function_call" || item?.type === "function_call_output" || item?.type === "message" || Boolean(item?.role) || typeof item?.text === "string";
-  }));
-  ensureCurrentTurnFits(renderedUnits, segments, maxCharacters, maxTokens);
-  const result = boundPrompt(segments, maxCharacters, maxTokens);
+    if (lastError) throw lastError;
+  }
   if (!result.trim()) throw new Error("EMPTY_PROMPT");
   return result;
 }
