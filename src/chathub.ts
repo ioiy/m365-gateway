@@ -98,7 +98,7 @@ export function assertBoundedPayload(
 // semantic frames.  The request-wide deadline remains ten minutes for long
 // turns that keep reporting progress, but a completely idle invocation must
 // fail much sooner so Codex can surface/retry it instead of appearing frozen.
-const CHAT_PROGRESS_IDLE_TIMEOUT_MS = 180_000;
+const CHAT_PROGRESS_IDLE_TIMEOUT_MS = 90_000;
 // Handshake is a transport preflight, not model generation. Keep it short so
 // a dead/incorrect ChatHub route is retried or surfaced promptly instead of
 // consuming most of the client's idle window before any invocation exists.

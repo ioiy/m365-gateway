@@ -55,7 +55,7 @@ import { encoder, decoder } from "./text-codec";
 import { SSE_TERMINATOR, containsCJK, unixNow } from "./constants";
 const STREAM_HEARTBEAT_MS = 5_000;
 const STREAM_PREFLIGHT_GRACE_MS = 250;
-const STREAM_BACKPRESSURE_TIMEOUT_MS = 30_000;
+const STREAM_BACKPRESSURE_TIMEOUT_MS = 15_000;
 const LOGICAL_REQUEST_TIMEOUT_MS = 10 * 60_000;
 const CONVERSATION_BUSY_GRACE_MS = 250;
 // Alias admission is a second Durable Object transaction after a Responses
@@ -80,7 +80,7 @@ const RETRYABLE_RESPONSE_ALIAS_SEED_FAILURES = new Set([
 const UPSTREAM_GATE_POLL_INITIAL_MS = 100;
 const UPSTREAM_GATE_POLL_MAX_MS = 5_000;
 const UPSTREAM_GATE_SERVER_HINT_MAX_MS = 5_000;
-const DEFAULT_REQUEST_TOKEN_BUDGET = 96_000;
+const DEFAULT_REQUEST_TOKEN_BUDGET = 128_000;
 const PROMPT_PROTOCOL_RESERVE_TOKENS = 2_048;
 const MIN_USABLE_PROMPT_TOKENS = 8_192;
 const CLIENT_TOOL_UNAVAILABLE_SENTINEL = "CLIENT_TOOL_UNAVAILABLE";
@@ -2264,7 +2264,7 @@ export function chatPrompt(
   return result;
 }
 
-const PROMPT_TOOL_RESULT_LIMIT = 96_000;
+const PROMPT_TOOL_RESULT_LIMIT = 64_000;
 
 function fnv1a32(text: string): string {
   let hash = 0x811c9dc5;
@@ -2331,6 +2331,23 @@ export function compactOversizedResponsesToolOutputs(
     compacted += 1;
   }
   return compacted;
+}
+/** Compact exceptionally large tool results in Chat Completions messages before
+ *  prompt assembly.  The Responses API path already does this via
+ *  compactOversizedResponsesToolOutputs; this mirrors that for /v1/chat/completions
+ *  so a single verbose tool result cannot make ensureCurrentTurnFits throw
+ *  CURRENT_TURN_TOO_LARGE. */
+function compactOversizedChatToolResults(
+  messages: Array<Record<string, unknown>>,
+  limit = PROMPT_TOOL_RESULT_LIMIT,
+): void {
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    if (String(message.role ?? "").toLowerCase() !== "tool") continue;
+    const output = contentText(message.content) || String(message.content ?? "");
+    if (output.length <= limit) continue;
+    message.content = boundedToolResultForPrompt(output, limit);
+  }
 }
 
 export function responsesPrompt(input: unknown, maxCharacters = 3_000_000, maxTokens = Number.POSITIVE_INFINITY): string {
@@ -3930,7 +3947,7 @@ async function resolveFunctionCall(
   const noToolRepairName = retryNarrowedNoTool
     ? preferredSecondAttemptLocalToolName(tools, ledger, originalPrompt)
     : null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     if (Date.now() >= logicalDeadline) throw new Error("CHAT_DEADLINE_EXCEEDED");
     const attemptTools = tools ?? [];
     // Keep the caller's tool choice unchanged across repair passes. In
@@ -6165,7 +6182,7 @@ function chatStream(
 // Personality system prompts that exceed this character ceiling are truncated
 // to preserve context budget.  The head of a persona file carries the role
 // definition and core instructions; the tail is usually examples/edge cases.
-const MAX_PERSONALITY_PROMPT_CHARS = 12_000;
+const MAX_PERSONALITY_PROMPT_CHARS = 8_000;
 
 function boundedPersonalityPrompt(text: string): string {
   if (text.length <= MAX_PERSONALITY_PROMPT_CHARS) return text;
@@ -6292,6 +6309,7 @@ async function chatCompletions(request: Request, env: Env, metrics?: RequestMetr
     const recoveryContext = recoveredRepeatedProposal
       ? "\n\nTOOL CONTINUATION RECOVERY: The latest proposed client action repeated an already completed or repeatedly failed action and was rejected. Stay on the current task, preserve all progress, and select a materially different next action or different arguments. Do not restart the audit or repeat the initial inspection."
       : "";
+    compactOversizedChatToolResults(promptValue);
     const toolResultContext = restoreCheckpointHistory ? `\n\n${FRESH_TOOL_RESULT_CONTINUATION_PROMPT}` : "";
     currentTurnPrompt = `${anchorBudget.prefix}${chatPrompt(promptValue, anchorBudget.promptCharacters, anchorBudget.promptTokens)}${evidence ? `\n\n${evidence}` : ""}${recoveryContext}${toolResultContext}`;
     prompt = currentTurnPrompt;

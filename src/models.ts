@@ -45,7 +45,7 @@ let MODELS: ModelSpec[] = [
 // advertised context minus output reserve equal to the gateway's verified 96k
 // active-prompt budget so clients compact before a single turn is too large to
 // summarize safely.
-export const CODEX_AUTO_COMPACT_TOKEN_LIMIT = 90_000;
+export const CODEX_AUTO_COMPACT_TOKEN_LIMIT = 80_000;
 
 const ALIASES: Record<string, string> = {
   "gpt-5.6": "gpt-5.6-sol",

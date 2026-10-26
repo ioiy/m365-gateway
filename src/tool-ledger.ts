@@ -7,9 +7,9 @@ import { encoder as textEncoder } from "./text-codec";
 // into a completed assistant turn, which made clients start a new task and
 // lose their SSH/execution context.  Keep a hard safety ceiling, but give one
 // logical task enough room to finish normally.
-export const DEFAULT_MAX_TOOL_ROUNDS = 256;
+export const DEFAULT_MAX_TOOL_ROUNDS = 128;
 export const HARD_MAX_TOOL_ROUNDS = 512;
-export const DEFAULT_MAX_CONSECUTIVE_FINGERPRINTS = 3;
+export const DEFAULT_MAX_CONSECUTIVE_FINGERPRINTS = 2;
 export const HARD_MAX_CONSECUTIVE_FINGERPRINTS = 8;
 export const MAX_COMPLETED_FINGERPRINT_OCCURRENCES = 8;
 
@@ -18,9 +18,9 @@ export const MAX_COMPLETED_FINGERPRINT_OCCURRENCES = 8;
 // completion claim under obsolete, potentially broader rules.
 const COMPLETION_ACTION_SCHEMA_VERSION = 2;
 
-const DEFAULT_EVIDENCE_ITEMS = 12;
+const DEFAULT_EVIDENCE_ITEMS = 8;
 const HARD_MAX_EVIDENCE_ITEMS = 64;
-const DEFAULT_EVIDENCE_CHARACTERS = 8_000;
+const DEFAULT_EVIDENCE_CHARACTERS = 6_000;
 const HARD_MAX_EVIDENCE_CHARACTERS = 32_000;
 
 const processExitSignal = /(?:^|\n)Process exited with code\s+(-?\d+)(?:\s|$)/iu;
